@@ -1,6 +1,17 @@
 plugins {
-    id("com.android.application")
+    alias(libs.plugins.androidApplication)
 }
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { stream ->
+        localProperties.load(stream)
+    }
+}
+
+def openAIKey = localProperties['OPENAI_API_KEY'] ?: "UNKNOWN"
+def encryptionKey = localProperties['ENCRYPTION_KEY'] ?: "UNKNOWN"
 
 android {
     namespace = "com.example.auditlogpromptsandresponses"
@@ -23,6 +34,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("String", "ENCRYPTION_KEY", "\"" + encryptionKey + "\"")
+            buildConfigField("String","OPENAI_API_KEY", "\"" + openAIKey + "\"")
+        }
+        debug {
+            buildConfigField("String", "ENCRYPTION_KEY","\"" + encryptionKey + "\"")
+            buildConfigField("String","OPENAI_API_KEY", "\"" + openAIKey + "\"")
         }
     }
     compileOptions {
@@ -31,6 +48,7 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        buildConfig=true
     }
 }
 

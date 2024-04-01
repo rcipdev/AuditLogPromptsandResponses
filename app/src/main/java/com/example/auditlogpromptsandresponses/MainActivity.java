@@ -1,14 +1,23 @@
 package com.example.auditlogpromptsandresponses;
 
+import android.app.ProgressDialog;
+import android.os.AsyncTask;
 import android.os.Bundle;
 
 import com.google.android.material.snackbar.Snackbar;
 
+import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
+import android.util.Log;
 import android.view.View;
 
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.navigation.NavController;
 import androidx.navigation.Navigation;
 import androidx.navigation.ui.AppBarConfiguration;
@@ -18,61 +27,216 @@ import com.example.auditlogpromptsandresponses.databinding.ActivityMainBinding;
 
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.jetbrains.annotations.Nullable;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    private AppBarConfiguration appBarConfiguration;
-    private ActivityMainBinding binding;
+    private ProgressDialog progressDialog;
+    private DatabaseHelper databaseHelper;
+
+    private String lastPrompt = null;
+    private String lastResponse = null;
+    private String promptSentTime = null;
+    private String responseReceivedTime = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        EdgeToEdge.enable(this);
+        setContentView(R.layout.activity_main);
 
-        binding = ActivityMainBinding.inflate(getLayoutInflater());
-        setContentView(binding.getRoot());
+        databaseHelper = new DatabaseHelper(this);
 
-        setSupportActionBar(binding.toolbar);
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
+            return insets;
+        });
 
-        NavController navController = Navigation.findNavController(this, R.id.nav_host_fragment_content_main);
-        appBarConfiguration = new AppBarConfiguration.Builder(navController.getGraph()).build();
-        NavigationUI.setupActionBarWithNavController(this, navController, appBarConfiguration);
+        EditText promptInput = findViewById(R.id.promptEt);
+        Button sendPromptBtn = findViewById(R.id.sendBtn);
+        Button cancelBtn = findViewById(R.id.cancelPromptBtn);
+        Button auditBtn = findViewById(R.id.auditBtn);
+        TextView responseTextView = findViewById(R.id.resultTv);
 
-        binding.fab.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-                        .setAnchorView(R.id.fab)
-                        .setAction("Action", null).show();
+        cancelBtn.setOnClickListener(v -> {
+            promptInput.setText("");
+            responseTextView.setText("");
+        });
+
+        sendPromptBtn.setOnClickListener(v -> {
+            String prompt = promptInput.getText().toString();
+            if (!prompt.isEmpty()) {
+                progressDialog = ProgressDialog.show(this,
+                        "Loading",
+                        "Please wait...",
+                        true);
+
+                promptSentTime = String.valueOf(new Date().getTime());
+
+
+                new OpenAIAsyncTask(response -> {
+                    if(progressDialog != null && progressDialog.isShowing()) {
+                        progressDialog.dismiss();
+                    }
+                    responseTextView.setText(response);
+
+                    // DB Values Setup
+                    responseReceivedTime = String.valueOf(new Date().getTime());
+                    lastPrompt = prompt;
+                    lastResponse = response;
+                }).execute(prompt);
+
+            } else {
+                Toast.makeText(this, "Enter A Prompt", Toast.LENGTH_SHORT).show();
             }
+
+        });
+
+        auditBtn.setOnClickListener(v -> {
+            if (lastPrompt != null && lastResponse != null && promptSentTime != null && responseReceivedTime != null) {
+                databaseHelper.insertAuditPrompt(promptSentTime, lastPrompt);
+                databaseHelper.insertResponse(responseReceivedTime, lastResponse);
+                Toast.makeText(this, "Audit information saved.", Toast.LENGTH_SHORT).show();
+
+                lastPrompt = null;
+                lastResponse = null;
+                promptSentTime = null;
+                responseReceivedTime = null;
+            } else {
+                Toast.makeText(this, "No prompt/response to save.", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        auditBtn.setOnLongClickListener(v -> {
+            showAuditDataDialog();
+            return true;
         });
     }
 
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        // Inflate the menu; this adds items to the action bar if it is present.
-        getMenuInflater().inflate(R.menu.menu_main, menu);
-        return true;
-    }
+    private void showAuditDataDialog() {
+        List<String> prompts = databaseHelper.getAllAuditPrompts();
+        List<String> responses = databaseHelper.getAllResponses();
 
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        // Handle action bar item clicks here. The action bar will
-        // automatically handle clicks on the Home/Up button, so long
-        // as you specify a parent activity in AndroidManifest.xml.
-        int id = item.getItemId();
-
-        //noinspection SimplifiableIfStatement
-        if (id == R.id.action_settings) {
-            return true;
+        StringBuilder dataToShow = new StringBuilder("Prompts:\n");
+        for (String prompt : prompts) {
+            dataToShow.append(prompt).append("\n");
+        }
+        dataToShow.append("\nResponses:\n");
+        for (String response : responses) {
+            dataToShow.append(response).append("\n");
         }
 
-        return super.onOptionsItemSelected(item);
+        // Display the data in a dialog
+        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+        System.out.println("============AUDITLOG============");
+        System.out.println(dataToShow);
+        System.out.println("========================");
+        builder.setTitle("Audit Data")
+                .setMessage(dataToShow.toString())
+                .setPositiveButton("OK", null);
+        builder.show();
     }
 
-    @Override
-    public boolean onSupportNavigateUp() {
-        NavController navController = Navigation.findNavController(this, R.id.nav_host_fragment_content_main);
-        return NavigationUI.navigateUp(navController, appBarConfiguration)
-                || super.onSupportNavigateUp();
+    private static class OpenAIAsyncTask extends AsyncTask<String, Void, String> {
+
+        public interface ResponseListener {
+            void onResponseReceived(String response);
+        }
+
+        private final ResponseListener listener;
+
+        public OpenAIAsyncTask(ResponseListener listener) {
+            this.listener = listener;
+        }
+
+        private static final String OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+
+        @Nullable
+        @Override
+        protected String doInBackground(@NonNull String... params) {
+            String prompt = params[0];
+            try {
+                URL url = new URL(OPENAI_URL);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+
+                String API_KEY = BuildConfig.OPENAI_API_KEY;
+                connection.setRequestProperty("Authorization", "Bearer " + API_KEY);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setDoOutput(true);
+
+                JSONObject jsonParam = new JSONObject();
+                jsonParam.put("model", "gpt-3.5-turbo");
+                JSONObject systemMessage = new JSONObject();
+                systemMessage.put("role", "system");
+                systemMessage.put("content", "You are a helpful assistant.");
+
+                JSONObject userMessage = new JSONObject();
+                userMessage.put("role", "user");
+                userMessage.put("content", prompt);
+
+                jsonParam.put("messages", new JSONArray(Arrays.asList(systemMessage, userMessage)));
+
+                OutputStream os = connection.getOutputStream();
+                os.write(jsonParam.toString().getBytes(StandardCharsets.UTF_8));
+                os.close();
+
+                BufferedReader br = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+                StringBuilder response = new StringBuilder();
+                String responseLine;
+                while ((responseLine = br.readLine()) != null) {
+                    response.append(responseLine.trim());
+                }
+                br.close();
+                return response.toString();
+
+            } catch (Exception e) {
+                Log.e("OpenAIAsyncTask", "API Request Error", e);
+                return null;
+            }
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            super.onPostExecute(result);
+            try {
+
+                JSONObject jsonResponse = new JSONObject(result);
+
+                JSONArray choices = jsonResponse.getJSONArray("choices");
+                if (choices.length() > 0) {
+                    JSONObject firstChoice = choices.getJSONObject(0);
+                    JSONObject message = firstChoice.getJSONObject("message");
+                    String content = message.getString("content");
+
+                    if (listener != null) {
+                        listener.onResponseReceived(content.trim());
+                    }
+                }
+            } catch (Exception e) {
+                Log.e("OpenAIAsyncTask", "Parsing Error from API response", e);
+                if (listener != null) {
+                    listener.onResponseReceived("Error parsing response: " + e.getMessage());
+                }
+            }
+        }
     }
 }
